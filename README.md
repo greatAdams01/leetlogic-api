@@ -1,0 +1,26 @@
+# Leetlogic Phase One
+
+TypeScript foundation for Leetlogic's Nigeria-first farmer-to-buyer marketplace.
+
+## Prerequisites
+
+- Node.js 22+
+- pnpm 11+
+- Docker with Compose
+
+## Setup
+
+1. Copy `.env.example` to `.env` and replace all secrets.
+2. Start PostgreSQL and Redis with `docker compose up -d`.
+3. Install dependencies with `pnpm install`.
+4. Generate the Prisma client with `pnpm db:generate`.
+5. Apply migrations with `pnpm db:migrate`.
+6. Seed languages, units, permissions and roles with `pnpm db:seed`.
+7. Start the API with `pnpm dev`.
+
+API documentation is available at `http://localhost:3000/docs`. Health endpoints are
+`/health/live` and `/health/ready`.
+
+In development, `OTP_PROVIDER=console` logs OTP codes rather than sending SMS. Do not use the
+console provider in production.
+

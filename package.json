@@ -1,0 +1,27 @@
+{
+  "name": "leetlogic",
+  "private": true,
+  "packageManager": "pnpm@11.19.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "pnpm --filter @leetlogic/api dev",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "format:check": "prettier --check .",
+    "db:generate": "pnpm --filter @leetlogic/database generate",
+    "db:migrate": "pnpm --filter @leetlogic/database migrate",
+    "db:seed": "pnpm --filter @leetlogic/database seed",
+    "locales:check": "pnpm --filter @leetlogic/localization check",
+    "verify": "pnpm locales:check && pnpm build && pnpm typecheck && pnpm test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@types/node": "^24.0.0",
+    "eslint": "^9.0.0",
+    "prettier": "^3.0.0",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.0.0",
+    "vitest": "^3.0.0"
+  }
+}

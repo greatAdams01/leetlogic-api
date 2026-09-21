@@ -1,0 +1,32 @@
+import { Router } from "express";
+import { authenticator } from "otplib";
+import { z } from "zod";
+import { normalizeNigerianPhone, refreshSchema, requestOtpSchema, verifyOtpSchema } from "@leetlogic/contracts";
+import { prisma } from "@leetlogic/database";
+import { decryptSecret, encryptSecret, hashToken, randomToken } from "../lib/crypto.js";
+import { AppError } from "../lib/errors.js";
+import { redis } from "../lib/redis.js";
+import { requireAuth } from "../middleware/auth.js";
+import { requestOtp, verifyOtp } from "../services/otp.js";
+import { createSession, revokeSession, rotateSession } from "../services/sessions.js";
+import { signAccessToken } from "../lib/tokens.js";
+import { audit } from "../services/audit.js";
+
+export const adminAuthRouter = Router();
+const totpSchema = z.object({ preAuthToken: z.string().min(32), code: z.string().regex(/^\d{6}$/), deviceId: z.string().min(8).max(128) });
+async function loadAdmin(phone: string) { const admin = await prisma.adminAccount.findUnique({ where: { phoneE164: phone } }); if (!admin || admin.status === "SUSPENDED" || admin.status === "CLOSED") throw new AppError(401, "ADMIN_LOGIN_FAILED", "Login could not be completed"); return admin; }
+async function permissions(adminId: string) { const rows = await prisma.adminRoleAssignment.findMany({ where: { adminId }, include: { role: { include: { permissions: { include: { permission: true } } } } } }); return [...new Set(rows.flatMap(x => x.role.permissions.map(y => y.permission.code)))]; }
+
+adminAuthRouter.post("/otp/request", async (req, res) => { const body = requestOtpSchema.parse(req.body); const phone = normalizeNigerianPhone(body.phone); await loadAdmin(phone); await requestOtp({ purpose: "ADMIN_LOGIN", phone, deviceId: body.deviceId, ip: req.ip, requestId: req.requestId }); res.status(202).json({ message: "If the account is eligible, a code has been sent.", expiresInSeconds: 300, resendAfterSeconds: 60 }); });
+adminAuthRouter.post("/otp/verify", async (req, res) => { const body = verifyOtpSchema.parse(req.body); const phone = normalizeNigerianPhone(body.phone); const admin = await loadAdmin(phone); await verifyOtp({ purpose: "ADMIN_LOGIN", phone, deviceId: body.deviceId, code: body.code, ip: req.ip, requestId: req.requestId }); const preAuthToken = randomToken(32); await redis().setex(`admin-preauth:${hashToken(preAuthToken)}`, 300, JSON.stringify({ adminId: admin.id, deviceId: body.deviceId })); res.json({ preAuthToken, next: admin.totpEnrolledAt ? "TOTP_CHALLENGE" : "TOTP_ENROLLMENT", expiresInSeconds: 300 }); });
+adminAuthRouter.post("/totp/enrol", async (req, res) => { const { preAuthToken } = z.object({ preAuthToken: z.string().min(32) }).parse(req.body); const raw = await redis().get(`admin-preauth:${hashToken(preAuthToken)}`); if (!raw) throw new AppError(401, "PREAUTH_EXPIRED", "Login challenge has expired"); const { adminId } = JSON.parse(raw) as { adminId: string }; const admin = await prisma.adminAccount.findUniqueOrThrow({ where: { id: adminId } }); if (admin.totpEnrolledAt) throw new AppError(409, "TOTP_ALREADY_ENROLLED", "TOTP is already enrolled"); const secret = authenticator.generateSecret(); await redis().setex(`admin-totp-enroll:${hashToken(preAuthToken)}`, 300, secret); res.json({ secret, otpauthUrl: authenticator.keyuri(admin.phoneE164, "Leetlogic Admin", secret) }); });
+adminAuthRouter.post("/totp/confirm", async (req, res) => { const body = totpSchema.parse(req.body); const raw = await redis().get(`admin-preauth:${hashToken(body.preAuthToken)}`); if (!raw) throw new AppError(401, "PREAUTH_EXPIRED", "Login challenge has expired"); const { adminId, deviceId } = JSON.parse(raw) as { adminId: string; deviceId: string }; if (deviceId !== body.deviceId) throw new AppError(401, "DEVICE_MISMATCH", "Login challenge is invalid"); const admin = await prisma.adminAccount.findUniqueOrThrow({ where: { id: adminId } }); let secret: string; let recoveryCodes: string[] | undefined;
+  if (!admin.totpEnrolledAt) { const pending = await redis().get(`admin-totp-enroll:${hashToken(body.preAuthToken)}`); if (!pending) throw new AppError(401, "TOTP_ENROLLMENT_EXPIRED", "Enrollment has expired"); secret = pending; }
+  else { if (!admin.totpSecretEncrypted) throw new AppError(500, "TOTP_CONFIGURATION_ERROR", "TOTP configuration is invalid"); secret = decryptSecret(admin.totpSecretEncrypted); }
+  if (!authenticator.check(body.code, secret)) throw new AppError(401, "TOTP_INVALID", "Authenticator code is invalid");
+  if (!admin.totpEnrolledAt) { recoveryCodes = Array.from({ length: 10 }, () => randomToken(8)); await prisma.$transaction([prisma.adminAccount.update({ where: { id: admin.id }, data: { totpSecretEncrypted: encryptSecret(secret), totpEnrolledAt: new Date(), status: "ACTIVE" } }), prisma.adminRecoveryCode.createMany({ data: recoveryCodes.map(code => ({ adminId: admin.id, codeHash: hashToken(code) })) })]); }
+  await redis().del(`admin-preauth:${hashToken(body.preAuthToken)}`, `admin-totp-enroll:${hashToken(body.preAuthToken)}`); const tokens = await createSession({ subject: "ADMIN", principalId: admin.id, deviceId: body.deviceId, permissions: await permissions(admin.id) }); await prisma.adminAccount.update({ where: { id: admin.id }, data: { lastLoginAt: new Date() } }); req.auth = { sub: admin.id, subject: "admin", sessionId: "pre-session" }; await audit(req, { action: "admin.login.succeeded", entityType: "admin_account", entityId: admin.id }); res.json({ ...tokens, ...(recoveryCodes ? { recoveryCodes } : {}) });
+});
+adminAuthRouter.post("/totp/step-up", requireAuth("admin"), async (req, res) => { const { code } = z.object({ code: z.string().regex(/^\d{6}$/) }).parse(req.body); const admin = await prisma.adminAccount.findUniqueOrThrow({ where: { id: req.auth!.sub } }); if (!admin.totpSecretEncrypted || !authenticator.check(code, decryptSecret(admin.totpSecretEncrypted))) throw new AppError(401, "TOTP_INVALID", "Authenticator code is invalid"); const accessToken = signAccessToken({ ...req.auth!, stepUpAt: Math.floor(Date.now() / 1000) }); await audit(req, { action: "admin.step_up.succeeded", entityType: "admin_account", entityId: admin.id }); res.json({ accessToken, expiresInSeconds: 600 }); });
+adminAuthRouter.post("/refresh", async (req, res) => res.json(await rotateSession(refreshSchema.parse(req.body).refreshToken, "ADMIN")));
+adminAuthRouter.post("/logout", requireAuth("admin"), async (req, res) => { await revokeSession(req.auth!.sessionId); res.status(204).end(); });
