@@ -28,7 +28,17 @@ services:
       timeout: 5s
       retries: 10
 
+  adminer:
+    image: adminer:4-standalone
+    restart: unless-stopped
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+
 volumes:
   postgres_data:
   redis_data:
-

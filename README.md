@@ -23,5 +23,19 @@ TypeScript foundation for Leetlogic's Nigeria-first farmer-to-buyer marketplace.
 API documentation is available at `http://localhost:3000/docs`. Health endpoints are
 `/health/live` and `/health/ready`.
 
+## Database viewer
+
+Docker Compose includes Adminer for local database inspection. After running
+`docker compose up -d`, open `http://localhost:8080` and use:
+
+- System: `PostgreSQL`
+- Server: `postgres`
+- Username: `leetlogic`
+- Password: `leetlogic`
+- Database: `leetlogic`
+
+Adminer is bound to `127.0.0.1`, so it is only available from your computer. It is a development
+tool and should not be deployed with the production stack.
+
 In development, `OTP_PROVIDER=console` logs OTP codes rather than sending SMS. Do not use the
 console provider in production.
