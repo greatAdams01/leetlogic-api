@@ -11,6 +11,8 @@ TypeScript foundation for Leetlogic's Nigeria-first farmer-to-buyer marketplace.
 ## Setup
 
 1. Copy `.env.example` to `.env` and replace all secrets.
+   Generate `TOTP_ENCRYPTION_KEY` with `openssl rand -hex 32` (64 hex characters) or
+   `openssl rand -base64 32` (a Base64-encoded 32-byte key).
 2. Start PostgreSQL and Redis with `docker compose up -d`.
 3. Install dependencies with `pnpm install`.
 4. Generate the Prisma client with `pnpm db:generate`.
@@ -23,4 +25,3 @@ API documentation is available at `http://localhost:3000/docs`. Health endpoints
 
 In development, `OTP_PROVIDER=console` logs OTP codes rather than sending SMS. Do not use the
 console provider in production.
-
